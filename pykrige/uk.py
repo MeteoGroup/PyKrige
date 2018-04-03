@@ -18,14 +18,14 @@ Classes:
 References:
     P.K. Kitanidis, Introduction to Geostatistcs: Applications in Hydrogeology,
     (Cambridge University Press, 1997) 272 p.
-    
+
 Copyright (c) 2015 Benjamin S. Murphy
 """
 
 import numpy as np
 import scipy.linalg
 from scipy.spatial.distance import cdist
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from . import variogram_models
 from . import core
 import warnings
