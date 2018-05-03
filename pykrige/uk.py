@@ -25,7 +25,10 @@ Copyright (c) 2015 Benjamin S. Murphy
 import numpy as np
 import scipy.linalg
 from scipy.spatial.distance import cdist
-# import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
 from . import variogram_models
 from . import core
 import warnings
@@ -223,8 +226,10 @@ class UniversalKriging:
         (Cambridge University Press, 1997) 272 p.
     """
 
-    UNBIAS = True   # This can be changed to remove the unbiasedness condition
-                    # Really for testing purposes only...
+    # This can be changed to remove the unbiasedness condition
+    # Really for testing purposes only...
+    UNBIAS = True
+
     eps = 1.e-10    # Cutoff for comparison to zero
     variogram_dict = {'linear': variogram_models.linear_variogram_model,
                       'power': variogram_models.power_variogram_model,
@@ -279,12 +284,17 @@ class UniversalKriging:
                 self.variogram_function = variogram_function
         else:
             self.variogram_function = self.variogram_dict[self.variogram_model]
-        if self.verbose:
-            print("Initializing variogram model...")
-        self.lags, self.semivariance, self.variogram_model_parameters = \
-            core.initialize_variogram_model(self.X_ADJUSTED, self.Y_ADJUSTED, self.Z,
-                                            self.variogram_model, variogram_parameters,
-                                            self.variogram_function, nlags, weight)
+
+        if variogram_parameters is None or self.enable_plotting:
+            if self.verbose:
+                print("Initializing variogram model...")
+            self.lags, self.semivariance, self.variogram_model_parameters = \
+                core.initialize_variogram_model(self.X_ADJUSTED, self.Y_ADJUSTED, self.Z,
+                                                self.variogram_model, variogram_parameters,
+                                                self.variogram_function, nlags, weight)
+        else:
+            self.variogram_model_parameters = variogram_parameters
+
         if self.verbose:
             if self.variogram_model == 'linear':
                 print("Using '%s' Variogram Model" % 'linear')
@@ -307,13 +317,13 @@ class UniversalKriging:
 
         if self.verbose:
             print("Calculating statistics on variogram model fit...")
-        self.delta, self.sigma, self.epsilon = core.find_statistics(self.X_ADJUSTED, self.Y_ADJUSTED,
-                                                                    self.Z, self.variogram_function,
-                                                                    self.variogram_model_parameters)
-        self.Q1 = core.calcQ1(self.epsilon)
-        self.Q2 = core.calcQ2(self.epsilon)
-        self.cR = core.calc_cR(self.Q2, self.sigma)
-        if self.verbose:
+            self.delta, self.sigma, self.epsilon = core.find_statistics(self.X_ADJUSTED, self.Y_ADJUSTED,
+                                                                        self.Z, self.variogram_function,
+                                                                        self.variogram_model_parameters)
+            self.Q1 = core.calcQ1(self.epsilon)
+            self.Q2 = core.calcQ2(self.epsilon)
+            self.cR = core.calc_cR(self.Q2, self.sigma)
+
             print("Q1 =", self.Q1)
             print("Q2 =", self.Q2)
             print("cR =", self.cR, '\n')
@@ -402,6 +412,28 @@ class UniversalKriging:
             self.functional_drift_terms = functional_drift
         else:
             self.functional_drift = False
+
+        self.n = self.X_ADJUSTED.shape[0]
+        self.n_withdrifts = self._get_n_withdrifts()
+        self._invert_matrix()
+
+    def _get_n_withdrifts(self):
+        n_withdrifts = self.n
+        if self.regional_linear_drift:
+            n_withdrifts += 2
+        if self.point_log_drift:
+            n_withdrifts += self.point_log_array.shape[0]
+        if self.external_Z_drift:
+            n_withdrifts += 1
+        if self.specified_drift:
+            n_withdrifts += len(self.specified_drift_data_arrays)
+        if self.functional_drift:
+            n_withdrifts += len(self.functional_drift_terms)
+        return n_withdrifts
+
+    def _invert_matrix(self):
+        a = self._get_kriging_matrix(self.n, self.n_withdrifts)
+        self.a_inv = scipy.linalg.inv(a)
 
     def _calculate_data_point_zscalars(self, x, y, type_='array'):
         """Determines the Z-scalar values at the specified coordinates
@@ -567,12 +599,13 @@ class UniversalKriging:
 
     def display_variogram_model(self):
         """Displays variogram model with the actual binned data"""
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        ax.plot(self.lags, self.semivariance, 'r*')
-        ax.plot(self.lags,
-                self.variogram_function(self.variogram_model_parameters, self.lags), 'k-')
-        plt.show()
+        if plt is not None:
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            ax.plot(self.lags, self.semivariance, 'r*')
+            ax.plot(self.lags,
+                    self.variogram_function(self.variogram_model_parameters, self.lags), 'k-')
+            plt.show()
 
     def switch_verbose(self):
         """Allows user to switch code talk-back on/off. Takes no arguments."""
@@ -588,11 +621,12 @@ class UniversalKriging:
 
     def plot_epsilon_residuals(self):
         """Plots the epsilon residuals for the variogram fit."""
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        ax.scatter(range(self.epsilon.size), self.epsilon, c='k', marker='*')
-        ax.axhline(y=0.0)
-        plt.show()
+        if plt is not None:
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            ax.scatter(range(self.epsilon.size), self.epsilon, c='k', marker='*')
+            ax.axhline(y=0.0)
+            plt.show()
 
     def get_statistics(self):
         return self.Q1, self.Q2, self.cR
@@ -654,34 +688,32 @@ class UniversalKriging:
 
         return a
 
-    def _exec_vector(self, a, bd, xy, xy_orig, mask, n_withdrifts, spec_drift_grids):
+    def _exec_vector(self, a_inv, bd, xy, xy_orig, mask, n_withdrifts, spec_drift_grids):
         """Solves the kriging system as a vectorized operation. This method
         can take a lot of memory for large grids and/or large datasets."""
 
-        npt = bd.shape[0]
+        npt = bd.shape[1]
         n = self.X_ADJUSTED.shape[0]
         zero_index = None
         zero_value = False
-
-        a_inv = scipy.linalg.inv(a)
 
         if np.any(np.absolute(bd) <= self.eps):
             zero_value = True
             zero_index = np.where(np.absolute(bd) <= self.eps)
 
         if self.UNBIAS:
-            b = np.zeros((npt, n_withdrifts+1, 1))
+            b = np.zeros((n_withdrifts+1, npt))
         else:
-            b = np.zeros((npt, n_withdrifts, 1))
-        b[:, :n, 0] = - self.variogram_function(self.variogram_model_parameters, bd)
+            b = np.zeros((n_withdrifts, npt))
+        b[:n, :] = - self.variogram_function(self.variogram_model_parameters, bd)
         if zero_value:
-            b[zero_index[0], zero_index[1], 0] = 0.0
+            b[zero_index[0], zero_index[1]] = 0.0
 
         i = n
         if self.regional_linear_drift:
-            b[:, i, 0] = xy[:, 0]
+            b[i, :] = xy[:, 0]
             i += 1
-            b[:, i, 0] = xy[:, 1]
+            b[i, :] = xy[:, 1]
             i += 1
         if self.point_log_drift:
             for well_no in range(self.point_log_array.shape[0]):
@@ -689,50 +721,47 @@ class UniversalKriging:
                                           (xy[:, 1] - self.point_log_array[well_no, 1])**2))
                 if np.any(np.isinf(log_dist)):
                     log_dist[np.isinf(log_dist)] = -100.0
-                b[:, i, 0] = - self.point_log_array[well_no, 2] * log_dist
+                b[i, :] = - self.point_log_array[well_no, 2] * log_dist
                 i += 1
         if self.external_Z_drift:
-            b[:, i, 0] = self._calculate_data_point_zscalars(xy_orig[:, 0], xy_orig[:, 1])
+            b[i, :] = self._calculate_data_point_zscalars(xy_orig[:, 0], xy_orig[:, 1])
             i += 1
         if self.specified_drift:
             for spec_vals in spec_drift_grids:
-                b[:, i, 0] = spec_vals.flatten()
+                b[i, :] = spec_vals.flatten()
                 i += 1
         if self.functional_drift:
             for func in self.functional_drift_terms:
-                b[:, i, 0] = func(xy[:, 0], xy[:, 1])
+                b[i, :] = func(xy[:, 0], xy[:, 1])
                 i += 1
         if i != n_withdrifts:
             warnings.warn("Error in setting up kriging system. Kriging may fail.", RuntimeWarning)
         if self.UNBIAS:
-            b[:, n_withdrifts, 0] = 1.0
+            b[n_withdrifts, :] = 1.0
 
         if (~mask).any():
-            mask_b = np.repeat(mask[:, np.newaxis, np.newaxis], n_withdrifts+1, axis=1)
+            mask_b = np.repeat(mask[np.newaxis, :], n_withdrifts+1, axis=0)
             b = np.ma.array(b, mask=mask_b)
 
-        if self.UNBIAS:
-            x = np.dot(a_inv, b.reshape((npt, n_withdrifts+1)).T).reshape((1, n_withdrifts+1, npt)).T
-        else:
-            x = np.dot(a_inv, b.reshape((npt, n_withdrifts)).T).reshape((1, n_withdrifts, npt)).T
-        zvalues = np.sum(x[:, :n, 0] * self.Z, axis=1)
-        sigmasq = np.sum(x[:, :, 0] * -b[:, :, 0], axis=1)
+        x = np.dot(a_inv, b)
+        zvalues = np.dot(self.Z.astype(np.float), x[:n, :])
+        sigmasq = np.sum(x * -b, axis=1)
 
         return zvalues, sigmasq
 
-    def _exec_loop(self, a, bd_all, xy, xy_orig, mask, n_withdrifts, spec_drift_grids):
+    def _exec_loop(self, a_inv, bd_all, xy, xy_orig, mask, n_withdrifts, spec_drift_grids):
         """Solves the kriging system by looping over all specified points.
         Less memory-intensive, but involves a Python-level loop."""
 
-        npt = bd_all.shape[0]
+        npt = bd_all.shape[1]
         n = self.X_ADJUSTED.shape[0]
         zvalues = np.zeros(npt)
         sigmasq = np.zeros(npt)
 
-        a_inv = scipy.linalg.inv(a)
-
-        for j in np.nonzero(~mask)[0]:   # Note that this is the same thing as range(npt) if mask is not defined,
-            bd = bd_all[j]               # otherwise it takes the non-masked elements.
+        # Note that this is the same thing as range(npt) if mask is not defined,
+        # otherwise it takes the non-masked elements.
+        for j in np.nonzero(~mask)[0]:
+            bd = bd_all[:, j]
             if np.any(np.absolute(bd) <= self.eps):
                 zero_value = True
                 zero_index = np.where(np.absolute(bd) <= self.eps)
@@ -857,23 +886,10 @@ class UniversalKriging:
         if style != 'grid' and style != 'masked' and style != 'points':
             raise ValueError("style argument must be 'grid', 'points', or 'masked'")
 
-        n = self.X_ADJUSTED.shape[0]
-        n_withdrifts = n
         xpts = np.atleast_1d(np.squeeze(np.array(xpoints, copy=True)))
         ypts = np.atleast_1d(np.squeeze(np.array(ypoints, copy=True)))
         nx = xpts.size
         ny = ypts.size
-        if self.regional_linear_drift:
-            n_withdrifts += 2
-        if self.point_log_drift:
-            n_withdrifts += self.point_log_array.shape[0]
-        if self.external_Z_drift:
-            n_withdrifts += 1
-        if self.specified_drift:
-            n_withdrifts += len(self.specified_drift_data_arrays)
-        if self.functional_drift:
-            n_withdrifts += len(self.functional_drift_terms)
-        a = self._get_kriging_matrix(n, n_withdrifts)
 
         if style in ['grid', 'masked']:
             if style == 'masked':
@@ -942,13 +958,13 @@ class UniversalKriging:
         if style != 'masked':
             mask = np.zeros(npt, dtype='bool')
 
-        bd = cdist(xy_points,  xy_data, 'euclidean')
+        bd = cdist(xy_data, xy_points, 'euclidean')
         if backend == 'vectorized':
-            zvalues, sigmasq = self._exec_vector(a, bd, xy_points, xy_points_original,
-                                                 mask, n_withdrifts, spec_drift_grids)
+            zvalues, sigmasq = self._exec_vector(self.a_inv, bd, xy_points, xy_points_original, mask,
+                                                 self.n_withdrifts, spec_drift_grids)
         elif backend == 'loop':
-            zvalues, sigmasq = self._exec_loop(a, bd, xy_points, xy_points_original,
-                                               mask, n_withdrifts, spec_drift_grids)
+            zvalues, sigmasq = self._exec_loop(self.a_inv, bd, xy_points, xy_points_original, mask,
+                                               self.n_withdrifts, spec_drift_grids)
         else:
             raise ValueError('Specified backend {} is not supported for 2D universal kriging.'.format(backend))
 

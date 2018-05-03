@@ -57,5 +57,5 @@ def exponential_variogram_model(params, dist):
 def spherical_variogram_model(params, dist):
     return np.piecewise(dist, [dist <= float(params[1]), dist > float(params[1])],
                         [lambda x: (float(params[0]) - float(params[2])) *
-                                   ((3*x)/(2*float(params[1])) - (x**3)/(2*float(params[1])**3)) + float(params[2]),
+                                   ((3*x)/(2*float(params[1])) - (x*x*x)/(2*float(params[1])**3)) + float(params[2]),
                          float(params[0])])
