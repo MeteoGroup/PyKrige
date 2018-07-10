@@ -542,7 +542,7 @@ class UniversalKriging3D:
 
         return a
 
-    def _exec_vector(self, a_inv, bd, xyz, mask, n_withdrifts, spec_drift_grids):
+    def _exec_vector(self, a_inv, bd, xyz, mask, n_withdrifts, spec_drift_grids, compute_sigmasq):
         """Solves the kriging system as a vectorized operation. This method
         can take a lot of memory for large grids and/or large datasets."""
 
@@ -590,18 +590,25 @@ class UniversalKriging3D:
 
         x = np.dot(a_inv, b)
         kvalues = np.dot(self.VALUES.astype(np.float), x[:n, :])
-        sigmasq = np.sum(x * -b, axis=0)
+
+        if compute_sigmasq:
+            sigmasq = np.sum(x * -b, axis=0)
+        else:
+            sigmasq = None
 
         return kvalues, sigmasq
 
-    def _exec_loop(self, a_inv, bd_all, xyz, mask, n_withdrifts, spec_drift_grids):
+    def _exec_loop(self, a_inv, bd_all, xyz, mask, n_withdrifts, spec_drift_grids, compute_sigmasq):
         """Solves the kriging system by looping over all specified points.
         Less memory-intensive, but involves a Python-level loop."""
 
         npt = bd_all.shape[1]
         n = self.X_ADJUSTED.shape[0]
         kvalues = np.zeros(npt)
-        sigmasq = np.zeros(npt)
+        if compute_sigmasq:
+            sigmasq = np.zeros(npt)
+        else:
+            sigmasq = None
 
         # Note that this is the same thing as range(npt) if mask is not defined,
         # otherwise it takes the non-masked elements.
@@ -645,11 +652,16 @@ class UniversalKriging3D:
 
             x = np.dot(a_inv, b)
             kvalues[j] = np.sum(x[:n, 0] * self.VALUES)
-            sigmasq[j] = np.sum(x[:, 0] * -b[:, 0])
+            if compute_sigmasq:
+                sigmasq[j] = np.sum(x[:, 0] * -b[:, 0])
 
         return kvalues, sigmasq
 
-    def execute(self, style, xpoints, ypoints, zpoints, mask=None, backend='vectorized', specified_drift_arrays=None):
+    def execute(self, style, xpoints, ypoints, zpoints,
+                mask=None,
+                backend='vectorized',
+                specified_drift_arrays=None,
+                compute_sigmasq=True):
         """Calculates a kriged grid and the associated variance.
 
         This is now the method that performs the main kriging calculation. Note that currently
@@ -718,7 +730,8 @@ class UniversalKriging3D:
                 kvalues will be a numpy masked array.
             sigmasq (numpy array, dim LxMxN or dim N): Variance at specified grid points or
                 at the specified set of points. If style was specified as 'masked', sigmasq
-                will be a numpy masked array.
+                will be a numpy masked array. Only computed and returned if 'compute_sigmasq' is
+                True (which is the default).
         """
 
         if self.verbose:
@@ -808,18 +821,25 @@ class UniversalKriging3D:
         bd = cdist(xyz_data, xyz_points, 'euclidean')
 
         if backend == 'vectorized':
-            kvalues, sigmasq = self._exec_vector(self.a_inv, bd, xyz_points, mask, self.n_withdrifts, spec_drift_grids)
+            kvalues, sigmasq = self._exec_vector(self.a_inv, bd, xyz_points, mask, self.n_withdrifts, spec_drift_grids,
+                                                 compute_sigmasq)
         elif backend == 'loop':
-            kvalues, sigmasq = self._exec_loop(self.a_inv, bd, xyz_points, mask, self.n_withdrifts, spec_drift_grids)
+            kvalues, sigmasq = self._exec_loop(self.a_inv, bd, xyz_points, mask, self.n_withdrifts, spec_drift_grids,
+                                               compute_sigmasq)
         else:
             raise ValueError('Specified backend {} is not supported for 3D ordinary kriging.'.format(backend))
 
         if style == 'masked':
             kvalues = np.ma.array(kvalues, mask=mask)
-            sigmasq = np.ma.array(sigmasq, mask=mask)
+            if compute_sigmasq:
+                sigmasq = np.ma.array(sigmasq, mask=mask)
 
         if style in ['masked', 'grid']:
             kvalues = kvalues.reshape((nz, ny, nx))
-            sigmasq = sigmasq.reshape((nz, ny, nx))
+            if compute_sigmasq:
+                sigmasq = sigmasq.reshape((nz, ny, nx))
 
-        return kvalues, sigmasq
+        if compute_sigmasq:
+            return kvalues, sigmasq
+        else:
+            return kvalues
