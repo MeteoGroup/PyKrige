@@ -584,7 +584,7 @@ class UniversalKriging3D:
         if self.UNBIAS:
             b[n_withdrifts, :] = 1.0
 
-        if (~mask).any():
+        if mask.any():
             mask_b = np.repeat(mask[np.newaxis, :], n_withdrifts+1, axis=0)
             b = np.ma.array(b, mask=mask_b)
 
