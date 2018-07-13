@@ -510,7 +510,11 @@ class UniversalKriging3D:
         else:
             a = np.zeros((n_withdrifts, n_withdrifts))
         a[:n, :n] = - self.variogram_function(self.variogram_model_parameters, d)
-        np.fill_diagonal(a, 0.)
+
+        # In order to avoid non-invertible kriging matrices in case of duplicate
+        # training points, we disturb the diagonal a bit.
+        # The values on the diagonal must all have been equal to the nugget.
+        np.fill_diagonal(a, 0.9999 * a[0, 0])
 
         i = n
         if self.regional_linear_drift:
@@ -548,20 +552,12 @@ class UniversalKriging3D:
 
         npt = bd.shape[1]
         n = self.X_ADJUSTED.shape[0]
-        zero_index = None
-        zero_value = False
-
-        if np.any(np.absolute(bd) <= self.eps):
-            zero_value = True
-            zero_index = np.where(np.absolute(bd) <= self.eps)
 
         if self.UNBIAS:
             b = np.zeros((n_withdrifts+1, npt))
         else:
             b = np.zeros((n_withdrifts, npt))
         b[:n, :] = - self.variogram_function(self.variogram_model_parameters, bd)
-        if zero_value:
-            b[zero_index[0], zero_index[1]] = 0.0
 
         i = n
         if self.regional_linear_drift:
