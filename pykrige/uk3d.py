@@ -68,10 +68,12 @@ class UniversalKriging3D:
             the custom variogram model, so an incorrect parameter list in such a case will
             probably trigger an esoteric exception someplace deep in the code.
         variogram_function (callable, optional): A callable function that must be provided
-            if variogram_model is specified as 'custom'. The function must take only two
-            arguments: first, a list of parameters for the variogram model; second, the
-            distances at which to calculate the variogram model. The list provided in
-            variogram_parameters will be passed to the function as the first argument.
+            if variogram_model is specified as 'custom'. The function must take three
+            arguments: first, a list of parameters for the variogram model - variogram_parameters
+            will be passed for this; second, the distances at which to calculate the variogram
+            model; third, the output variogram numpy array that the function must fill.
+            The function must fill the passed in array instead of returning a new array
+            in order to allow speed optimizations by avoiding too much main memory access.
         nlags (int, optional): Number of averaging bins for the semivariogram.
             Default is 6.
         weight (boolean, optional): Flag that specifies if semivariance at smaller lags
@@ -509,7 +511,7 @@ class UniversalKriging3D:
             a = np.zeros((n_withdrifts+1, n_withdrifts+1))
         else:
             a = np.zeros((n_withdrifts, n_withdrifts))
-        a[:n, :n] = - self.variogram_function(self.variogram_model_parameters, d)
+        self.variogram_function(self.variogram_model_parameters, d, a)
 
         # In order to avoid non-invertible kriging matrices in case of duplicate
         # training points, we disturb the diagonal a bit.
@@ -557,7 +559,7 @@ class UniversalKriging3D:
             b = np.zeros((n_withdrifts+1, npt))
         else:
             b = np.zeros((n_withdrifts, npt))
-        b[:n, :] = - self.variogram_function(self.variogram_model_parameters, bd)
+        self.variogram_function(self.variogram_model_parameters, bd, b)
 
         i = n
         if self.regional_linear_drift:
